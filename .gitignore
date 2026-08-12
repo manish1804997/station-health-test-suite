@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+reports/
+*.db
+.venv/
+venv/
+.venv-run/
+.DS_Store
+.claude/
+
+# Not part of the deliverable -- avoid publishing the employer's
+# confidential interview instructions to a public repo.
+Staff QA Engineer - Interview Assignment.md

@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+pythonpath = ["service", "clients", "builder", "config", "."]
+testpaths = ["tests"]
+markers = [
+    "unit: pure-function tests with no I/O",
+    "api: FastAPI TestClient tests against an isolated SQLite DB",
+    "perf: concurrency / load smoke tests, slower than the rest of the suite",
+    "e2e: tests that require the docker-compose stack (real Postgres) running",
+]
+addopts = "-ra --strict-markers"

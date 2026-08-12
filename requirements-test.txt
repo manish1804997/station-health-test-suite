@@ -1,0 +1,5 @@
+# Test-only dependencies. Installed on top of service/requirements.txt.
+pytest>=8.3,<10
+pytest-cov>=6.1
+pytest-html>=4.1
+httpx>=0.28

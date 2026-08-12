@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  lint:
+    name: Lint test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install ruff
+      # We only lint our own test code, not service/ -- that's the platform
+      # team's codebase and gating our CI on its style is not our call.
+      - run: ruff check tests/ clients/ builder/ config/ conftest.py
+
+  unit-and-api-tests:
+    name: Unit + API tests (SQLite)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install -r service/requirements.txt
+          pip install -r requirements-test.txt
+      - name: Run unit, API and concurrency-smoke tests
+        run: |
+          mkdir -p reports
+          pytest tests/unit tests/api tests/perf \
+            --cov=service/app --cov-report=term-missing --cov-report=xml:reports/coverage.xml \
+            --junitxml=reports/junit.xml \
+            --html=reports/report.html --self-contained-html -v
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: reports/coverage.xml
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-results
+          path: reports/junit.xml
+      - name: Upload HTML test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-report
+          path: reports/report.html
+
+  e2e-docker:
+    name: E2E smoke tests (docker compose + Postgres)
+    needs: unit-and-api-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install test dependencies
+        # service/requirements.txt is needed here too, even though these
+        # tests only talk to the containerized service over real HTTP --
+        # the root conftest.py is an ancestor of tests/e2e/ and pytest
+        # always collects it, and it imports app.database/app.main to set
+        # up the unit/api fixtures. On Linux psycopg2-binary has a
+        # prebuilt wheel, unlike on some local dev machines (see README).
+        run: |
+          pip install -r service/requirements.txt
+          pip install -r requirements-test.txt
+      - name: Start the docker-compose stack
+        working-directory: service
+        run: docker compose up -d --build
+      - name: Wait for the API to become healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health > /dev/null; then
+              echo "Service is up"
+              exit 0
+            fi
+            echo "Waiting for service... ($i/30)"
+            sleep 2
+          done
+          echo "Service did not become healthy in time"
+          docker compose -f service/docker-compose.yml logs
+          exit 1
+      - name: Run E2E smoke tests against the real stack
+        run: |
+          mkdir -p reports
+          pytest tests/e2e -m e2e --html=reports/report-e2e.html --self-contained-html -v
+      - name: Upload HTML test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-report-e2e
+          path: reports/report-e2e.html
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose -f service/docker-compose.yml logs
+      - name: Tear down the stack
+        if: always()
+        working-directory: service
+        run: docker compose down -v
